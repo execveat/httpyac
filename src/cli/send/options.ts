@@ -13,7 +13,7 @@ export interface SendOptions {
   filter?: SendFilterOptions;
   help?: boolean;
   line?: number;
-  name?: string;
+  name?: Array<string>;
   interactive?: boolean;
   insecure?: boolean;
   json?: boolean;

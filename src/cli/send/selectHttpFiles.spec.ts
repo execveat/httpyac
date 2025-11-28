@@ -60,11 +60,18 @@ describe('selectHttpFiles', () => {
     expect(result.map(h => h.httpRegions)).toEqual([undefined, undefined]);
   });
   it('should return values by name', async () => {
-    const result = await selectHttpFiles(defaultHttpFiles, { name: 'foo1' });
+    const result = await selectHttpFiles(defaultHttpFiles, { name: ['foo1'] });
 
     expect(result.length).toBe(1);
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
     expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1']]);
+  });
+  it('should return values by multiple names', async () => {
+    const result = await selectHttpFiles(defaultHttpFiles, { name: ['foo1', 'test2'] });
+
+    expect(result.length).toBe(2);
+    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1', 'test2']);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1'], ['test2']]);
   });
   it('should return values by tag', async () => {
     const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo', 'fuu'] });

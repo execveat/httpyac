@@ -29,7 +29,11 @@ export function sendCommand() {
     .option('--json', 'use json output')
     .option('--junit', 'use junit xml output')
     .option('-l, --line <line>', 'line of the http requests')
-    .option('-n, --name <name>', 'name of the http requests')
+    .option(
+      '-n, --name <name>',
+      'name of the http requests',
+      (value, previous: Array<string> | undefined) => (previous ? [...previous, value] : [value])
+    )
     .option('--no-color', 'disable color support')
     .option('-o, --output <output>', 'output format of response (short, body, headers, response, exchange, none)')
     .option(
