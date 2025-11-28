@@ -2,10 +2,10 @@ import { default as chalk } from 'chalk';
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
 import type { Options } from 'globby';
-import { sep } from 'path';
+import { isAbsolute, join, relative, sep } from 'path';
 
 import { send } from '../../httpYacApi';
-import { Logger } from '../../io';
+import { Logger, fileProvider } from '../../io';
 import * as models from '../../models';
 import { HttpFileStore } from '../../store';
 import * as utils from '../../utils';
@@ -49,6 +49,7 @@ export function sendCommand() {
     .option('-s, --silent', 'log only request')
     .option('-t, --tag  <tag...>', 'list of tags to execute')
     .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
+    .option('--resume', 'resume from last failed request (requires --bail)')
     .option('--timeout <timeout>', 'maximum time allowed for connections', utils.toNumber)
     .option('--var  <variables...>', 'list of variables (e.g foo="bar")')
     .option('-v, --verbose', 'make the operation more talkative')
@@ -61,6 +62,8 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
   const { httpFiles, config } = await getHttpFiles(fileNames, options, context.config || {});
   context.config = config;
   initRequestLogger(options, context);
+  const resumeStateFile = options.resume ? join(process.cwd(), '.httpyac-state') : undefined;
+  let resumeState = resumeStateFile ? await loadResumeState(resumeStateFile) : undefined;
   try {
     if (httpFiles.length > 0) {
       let isFirstRequest = true;
@@ -69,6 +72,10 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
         let selection = await selectHttpFiles(httpFiles, options);
         if (options.pruneRefs) {
           selection = applyPruneRefs(selection);
+        }
+        if (resumeState) {
+          selection = applyResumeState(selection, resumeState);
+          resumeState = undefined;
         }
         const totalRequests = countSelectedRequests(selection);
         const totalFiles = selection.length;
@@ -107,15 +114,19 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
         );
         await utils.promiseQueue(options.parallel || 1, ...sendFuncs);
 
+        const processedHttpRegions = context.processedHttpRegions || [];
+        const firstFailed =
+          options.resume && options.bail ? findFirstFailedRegion(processedHttpRegions) : undefined;
+
         if (options.jsonl) {
           emittedRequests = emitRemainingJsonLines(
-            context.processedHttpRegions || [],
+            processedHttpRegions,
             options,
             emitJsonLine,
             emittedRequests,
             totalRequests
           );
-          const cliJsonOutput = toSendJsonOutput(context.processedHttpRegions || [], options);
+          const cliJsonOutput = toSendJsonOutput(processedHttpRegions, options);
           emitJsonLine?.({
             type: 'summary',
             totalRequests,
@@ -124,6 +135,14 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
           });
         } else {
           reportOutput(context, options);
+        }
+
+        if (resumeStateFile && options.resume && options.bail) {
+          if (firstFailed) {
+            await saveResumeState(resumeStateFile, firstFailed);
+          } else {
+            await clearResumeState(resumeStateFile);
+          }
         }
       }
     } else {
@@ -202,6 +221,15 @@ function countSelectedRequests(selection: SelectActionResult) {
   }, 0);
 }
 
+function findFirstFailedRegion(processed: Array<models.ProcessedHttpRegion>) {
+  return processed.find(region =>
+    region.testResults?.some(
+      testResult =>
+        testResult.status === models.TestResultStatus.ERROR || testResult.status === models.TestResultStatus.FAILED
+    )
+  );
+}
+
 export function applyPruneRefs(selection: SelectActionResult): SelectActionResult {
   const selectionWithRegions = selection.map(entry => ({
     httpFile: entry.httpFile,
@@ -272,6 +300,104 @@ function getRefNames(region: models.HttpRegion): Array<string> {
     result.push(...refs);
   }
   return result;
+}
+
+interface ResumeState {
+  fileName: string;
+  line: number;
+  name?: string;
+}
+
+export function applyResumeState(selection: SelectActionResult, state: ResumeState): SelectActionResult {
+  const resumedSelection: SelectActionResult = [];
+  let skipping = true;
+
+  for (const entry of selection) {
+    const regions = entry.httpRegions ?? entry.httpFile.httpRegions;
+    const normalizedFile = normalizeFileName(entry.httpFile.fileName);
+    const filtered: Array<models.HttpRegion> = [];
+
+    for (const region of regions) {
+      if (region.metaData?.disabled === true || region.metaData?.skip) {
+        continue;
+      }
+      if (skipping) {
+        if (matchesResumeTarget(normalizedFile, region, state)) {
+          skipping = false;
+          filtered.push(region);
+        }
+      } else {
+        filtered.push(region);
+      }
+    }
+
+    if (filtered.length > 0) {
+      const useFullFile = regions === entry.httpFile.httpRegions && filtered.length === regions.length;
+      resumedSelection.push({
+        httpFile: entry.httpFile,
+        httpRegions: useFullFile ? undefined : filtered,
+      });
+    }
+  }
+
+  return skipping ? selection : resumedSelection;
+}
+
+function matchesResumeTarget(
+  normalizedFile: string | undefined,
+  region: models.HttpRegion,
+  state: ResumeState
+): boolean {
+  if (!normalizedFile || normalizedFile !== state.fileName) {
+    return false;
+  }
+  return region.symbol.startLine === state.line;
+}
+
+function normalizeFileName(fileName: models.PathLike | undefined) {
+  if (!fileName) {
+    return undefined;
+  }
+  const fsPath = fileProvider.fsPath(fileName) || fileProvider.toString(fileName);
+  if (!fsPath) {
+    return undefined;
+  }
+  return isAbsolute(fsPath) ? relative(process.cwd(), fsPath) : fsPath;
+}
+
+async function loadResumeState(stateFile: string): Promise<ResumeState | undefined> {
+  try {
+    const content = await fs.readFile(stateFile, 'utf-8');
+    return JSON.parse(content) as ResumeState;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to read resume state from ${stateFile}:`, err);
+    }
+    return undefined;
+  }
+}
+
+async function saveResumeState(stateFile: string, failedRegion: models.ProcessedHttpRegion): Promise<void> {
+  const fileName = normalizeFileName(failedRegion.filename);
+  if (!fileName) {
+    return;
+  }
+  const state: ResumeState = {
+    fileName,
+    line: failedRegion.symbol.startLine,
+    name: utils.toString(failedRegion.metaData?.name),
+  };
+  await fs.writeFile(stateFile, utils.stringifySafe(state, 2));
+}
+
+async function clearResumeState(stateFile: string): Promise<void> {
+  try {
+    await fs.unlink(stateFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`Failed to clear resume state at ${stateFile}:`, err);
+    }
+  }
 }
 
 export function convertCliOptionsToContext(cliOptions: SendOptions) {

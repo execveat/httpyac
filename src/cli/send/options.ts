@@ -31,6 +31,7 @@ export interface SendOptions {
   var?: Array<string>;
   verbose?: boolean;
   pruneRefs?: boolean;
+  resume?: boolean;
 }
 
 export function getLogLevel(cliOptions: SendOptions): LogLevel | undefined {
