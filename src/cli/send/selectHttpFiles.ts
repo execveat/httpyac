@@ -48,10 +48,10 @@ function selectHttpFilesWithArgs(httpFiles: Array<models.HttpFile>, cliOptions: 
 }
 
 function hasName(httpRegion: models.HttpRegion, names: Array<string> | undefined) {
-  if (names && names.length > 0) {
-    return names.includes(httpRegion.metaData?.name);
+  if (!names || names.length === 0 || !utils.isString(httpRegion.metaData?.name)) {
+    return false;
   }
-  return false;
+  return names.includes(httpRegion.metaData.name);
 }
 
 function isLine(httpRegion: models.HttpRegion, line: number | undefined) {
