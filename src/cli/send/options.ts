@@ -30,6 +30,7 @@ export interface SendOptions {
   timeout?: number;
   var?: Array<string>;
   verbose?: boolean;
+  pruneRefs?: boolean;
 }
 
 export function getLogLevel(cliOptions: SendOptions): LogLevel | undefined {
