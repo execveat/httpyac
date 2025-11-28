@@ -25,6 +25,7 @@ export interface HttpFileSendContext {
   progress?: Progress;
   httpRegionPredicate?: (obj: HttpRegion) => boolean;
   processedHttpRegions?: Array<ProcessedHttpRegion>;
+  processedHttpRegionListener?: (processed: ProcessedHttpRegion) => void;
   scriptConsole?: ConsoleLogHandler;
   logStream?: StreamLogger;
   logResponse?: RequestLogger;

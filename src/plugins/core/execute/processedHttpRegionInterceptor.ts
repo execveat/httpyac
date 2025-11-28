@@ -4,6 +4,7 @@ import * as models from '../../../models';
 
 export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.ProcessorContext], boolean | void> {
   id = 'processedHttpRegion';
+  private emitted = new WeakSet<models.ProcessedHttpRegion>();
 
   public getResponseLoggingInterceptor(): HookInterceptor<
     [models.HttpResponse, models.ProcessorContext],
@@ -31,6 +32,7 @@ export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.P
     hookContext: HookTriggerContext<[models.ProcessorContext], boolean | undefined>
   ): Promise<boolean | undefined> {
     this.updateProcessedHttpRegionAfterLoop(hookContext.args[0]);
+    this.emitProcessedHttpRegion(hookContext.args[0]);
     return true;
   }
 
@@ -38,6 +40,7 @@ export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.P
     hookContext: HookTriggerContext<[models.ProcessorContext], boolean | undefined>
   ): Promise<boolean | undefined> {
     this.updateProcessedHttpRegionAfterLoop(hookContext.args[0]);
+    this.emitProcessedHttpRegion(hookContext.args[0]);
     return true;
   }
 
@@ -53,6 +56,8 @@ export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.P
         ...context.httpRegion.metaData,
       };
       processedHttpRegion.testResults = context.httpRegion.testResults;
+      processedHttpRegion.response = context.httpRegion.response || processedHttpRegion.response;
+      processedHttpRegion.request = context.httpRegion.response?.request || processedHttpRegion.request;
     }
   }
 
@@ -66,6 +71,8 @@ export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.P
       processedHttpRegion.request = response.request;
       processedHttpRegion.response = response;
     }
+    this.updateProcessedHttpRegionAfterLoop(context);
+    this.emitProcessedHttpRegion(context);
     return true;
   }
 
@@ -78,5 +85,16 @@ export class ProcessedHttpRegionInterceptor implements HookInterceptor<[models.P
       testResults: context.httpRegion.testResults,
       start: performance.now(),
     };
+  }
+
+  private emitProcessedHttpRegion(context: models.ProcessorContext) {
+    if (!context.processedHttpRegionListener) {
+      return;
+    }
+    const processedHttpRegion = context.processedHttpRegions?.find(obj => obj.id === context.httpRegion.id);
+    if (processedHttpRegion && !this.emitted.has(processedHttpRegion) && processedHttpRegion.duration !== undefined) {
+      this.emitted.add(processedHttpRegion);
+      context.processedHttpRegionListener(processedHttpRegion);
+    }
   }
 }

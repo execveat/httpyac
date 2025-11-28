@@ -51,29 +51,7 @@ export function toSendJsonOutput(
   const requests: Array<SendOutputRequest> = [];
 
   for (const httpRegion of processedHttpRegions) {
-    let output = options.output;
-    if (options.outputFailed && httpRegion.testResults?.some?.(test => !test.status)) {
-      output = options.outputFailed;
-    }
-    const result: SendOutputRequest = {
-      fileName: fileProvider.fsPath(httpRegion.filename) || fileProvider.toString(httpRegion.filename),
-      response: convertResponse(httpRegion.response, output),
-      name: utils.toString(httpRegion.metaData?.name) || httpRegion.symbol.name,
-      line: httpRegion.symbol.startLine,
-      title: utils.toString(httpRegion.metaData?.title),
-      description: utils.toString(httpRegion.metaData?.description),
-      testResults: httpRegion.testResults,
-      timestamp: new Date(performance.timeOrigin + httpRegion.start).toISOString(),
-      duration: httpRegion.duration,
-      summary: {
-        totalTests: httpRegion.testResults?.length || 0,
-        failedTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.FAILED).length || 0,
-        successTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.SUCCESS).length || 0,
-        erroredTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.ERROR).length || 0,
-        skippedTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.SKIPPED).length || 0,
-      },
-    };
-    requests.push(result);
+    requests.push(toSendOutputRequest(httpRegion, options));
   }
   let resultRequests = requests;
   if (options.filter === SendFilterOptions.onlyFailed) {
@@ -102,6 +80,31 @@ export function createTestSummary(requests: Array<SendOutputRequest>): SendReque
     successTests: requests.map(obj => obj.summary.successTests).reduce(sum, 0),
     erroredTests: requests.map(obj => obj.summary.erroredTests).reduce(sum, 0),
     skippedTests: requests.map(obj => obj.summary.skippedTests).reduce(sum, 0),
+  };
+}
+
+export function toSendOutputRequest(httpRegion: ProcessedHttpRegion, options: SendOptions): SendOutputRequest {
+  let output = options.output;
+  if (options.outputFailed && httpRegion.testResults?.some?.(test => !test.status)) {
+    output = options.outputFailed;
+  }
+  return {
+    fileName: fileProvider.fsPath(httpRegion.filename) || fileProvider.toString(httpRegion.filename),
+    response: convertResponse(httpRegion.response, output),
+    name: utils.toString(httpRegion.metaData?.name) || httpRegion.symbol.name,
+    line: httpRegion.symbol.startLine,
+    title: utils.toString(httpRegion.metaData?.title),
+    description: utils.toString(httpRegion.metaData?.description),
+    testResults: httpRegion.testResults,
+    timestamp: new Date(performance.timeOrigin + httpRegion.start).toISOString(),
+    duration: httpRegion.duration,
+    summary: {
+      totalTests: httpRegion.testResults?.length || 0,
+      failedTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.FAILED).length || 0,
+      successTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.SUCCESS).length || 0,
+      erroredTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.ERROR).length || 0,
+      skippedTests: httpRegion.testResults?.filter?.(t => t.status === TestResultStatus.SKIPPED).length || 0,
+    },
   };
 }
 
