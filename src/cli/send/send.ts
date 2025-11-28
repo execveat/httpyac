@@ -48,6 +48,7 @@ export function sendCommand() {
     .option('--parallel <count>', 'send parallel requests', utils.toNumber)
     .option('-s, --silent', 'log only request')
     .option('-t, --tag  <tag...>', 'list of tags to execute')
+    .option('--prune-refs', 'only execute leaf requests (prune referenced dependencies)')
     .option('--timeout <timeout>', 'maximum time allowed for connections', utils.toNumber)
     .option('--var  <variables...>', 'list of variables (e.g foo="bar")')
     .option('-v, --verbose', 'make the operation more talkative')
@@ -65,7 +66,10 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
       let isFirstRequest = true;
       while (options.interactive || isFirstRequest) {
         isFirstRequest = false;
-        const selection = await selectHttpFiles(httpFiles, options);
+        let selection = await selectHttpFiles(httpFiles, options);
+        if (options.pruneRefs) {
+          selection = applyPruneRefs(selection);
+        }
         const totalRequests = countSelectedRequests(selection);
         const totalFiles = selection.length;
 
@@ -196,6 +200,78 @@ function countSelectedRequests(selection: SelectActionResult) {
         .length
     );
   }, 0);
+}
+
+export function applyPruneRefs(selection: SelectActionResult): SelectActionResult {
+  const selectionWithRegions = selection.map(entry => ({
+    httpFile: entry.httpFile,
+    regions: entry.httpRegions ?? entry.httpFile.httpRegions,
+  }));
+
+  const allRegions: Array<models.HttpRegion> = [];
+  for (const { regions } of selectionWithRegions) {
+    for (const region of regions) {
+      if (region.metaData?.disabled === true || region.metaData?.skip) {
+        continue;
+      }
+      allRegions.push(region);
+    }
+  }
+
+  const regionsByName = new Map<string, Array<models.HttpRegion>>();
+  for (const region of allRegions) {
+    const name = utils.toString(region.metaData?.name);
+    if (name) {
+      const regionsWithName = regionsByName.get(name) || [];
+      regionsWithName.push(region);
+      regionsByName.set(name, regionsWithName);
+    }
+  }
+
+  const referencedRegions = new Set<models.HttpRegion>();
+  for (const region of allRegions) {
+    for (const refName of getRefNames(region)) {
+      const targets = regionsByName.get(refName);
+      targets?.forEach(target => referencedRegions.add(target));
+    }
+  }
+
+  const leafRegions = new Set(allRegions.filter(region => !referencedRegions.has(region)));
+
+  const prunedSelection: SelectActionResult = [];
+  for (const { httpFile, regions } of selectionWithRegions) {
+    const filtered = regions.filter(region => leafRegions.has(region));
+    if (filtered.length === 0) {
+      continue;
+    }
+    const useFullFile = regions === httpFile.httpRegions && filtered.length === regions.length;
+    prunedSelection.push({
+      httpFile,
+      httpRegions: useFullFile ? undefined : filtered,
+    });
+  }
+
+  return prunedSelection;
+}
+
+function getRefNames(region: models.HttpRegion): Array<string> {
+  const result: Array<string> = [];
+  const refValues = [region.metaData?.ref, region.metaData?.forceRef];
+  for (const value of refValues) {
+    if (!value || value === true) {
+      continue;
+    }
+    const asString = utils.toString(value);
+    if (!asString) {
+      continue;
+    }
+    const refs = asString
+      .split(/[,\s]+/u)
+      .map(ref => ref.trim())
+      .filter(Boolean);
+    result.push(...refs);
+  }
+  return result;
 }
 
 export function convertCliOptionsToContext(cliOptions: SendOptions) {
