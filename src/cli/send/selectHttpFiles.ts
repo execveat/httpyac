@@ -22,13 +22,14 @@ export async function selectHttpFiles(
 
 function selectHttpFilesWithArgs(httpFiles: Array<models.HttpFile>, cliOptions: SendOptions) {
   const result: SelectActionResult = [];
+  const tagMatchers = normalizeTagMatchers(cliOptions.tag);
 
   for (const httpFile of httpFiles) {
     const httpRegions = httpFile.httpRegions.filter(h => {
       if (hasName(h, cliOptions.name)) {
         return true;
       }
-      if (hasTag(h, cliOptions.tag)) {
+      if (hasTag(h, tagMatchers)) {
         return true;
       }
       if (isLine(h, cliOptions.line)) {
@@ -60,12 +61,43 @@ function isLine(httpRegion: models.HttpRegion, line: number | undefined) {
   return false;
 }
 
-function hasTag(httpRegion: models.HttpRegion, tags: Array<string> | undefined) {
-  if (tags && utils.isString(httpRegion.metaData?.tag)) {
-    const metaDataTag = httpRegion.metaData.tag?.split(',').map(t => t.trim());
-    return tags.some(t => metaDataTag.includes(t));
+function normalizeTagMatchers(tags: Array<string> | undefined): Array<Array<string>> {
+  const matchers: Array<Array<string>> = [];
+
+  if (!tags || tags.length === 0) {
+    return matchers;
   }
-  return false;
+
+  for (const rawTag of tags) {
+    if (!rawTag) {
+      continue;
+    }
+
+    const sanitized = rawTag.replace(/\s+/gu, '');
+    const segments = sanitized.split(',').filter(Boolean);
+
+    for (const segment of segments) {
+      const allTags = segment.split('+').filter(Boolean);
+      if (allTags.length > 0) {
+        matchers.push(allTags);
+      }
+    }
+  }
+
+  return matchers;
+}
+
+function hasTag(httpRegion: models.HttpRegion, matchers: Array<Array<string>>) {
+  if (!matchers || matchers.length === 0 || !utils.isString(httpRegion.metaData?.tag)) {
+    return false;
+  }
+
+  const metaDataTag = httpRegion.metaData.tag?.split(',').map(t => t.trim()).filter(Boolean);
+  if (!metaDataTag || metaDataTag.length === 0) {
+    return false;
+  }
+
+  return matchers.some(group => group.every(tag => metaDataTag.includes(tag)));
 }
 
 async function selectManualHttpFiles(httpFiles: Array<models.HttpFile>): Promise<SelectActionResult> {
