@@ -211,14 +211,62 @@ function createJsonlEmitter() {
 }
 
 function countSelectedRequests(selection: SelectActionResult) {
-  return selection.reduce((total, { httpFile, httpRegions }) => {
-    const regions = httpRegions ?? httpFile.httpRegions;
-    return (
-      total +
-      regions.filter(region => !region.isGlobal() && region.metaData?.disabled !== true && !region.metaData?.skip)
-        .length
-    );
-  }, 0);
+  // Build a set of all regions we will execute, including referenced dependencies.
+  const selectionWithRegions = selection.map(entry => ({
+    httpFile: entry.httpFile,
+    regions: entry.httpRegions ?? entry.httpFile.httpRegions,
+  }));
+
+  const executableRegions = new Set<models.HttpRegion>();
+  const allRegions: Array<models.HttpRegion> = [];
+
+  for (const { regions } of selectionWithRegions) {
+    for (const region of regions) {
+      if (region.metaData?.disabled === true || region.metaData?.skip || region.isGlobal()) {
+        continue;
+      }
+      executableRegions.add(region);
+      allRegions.push(region);
+    }
+  }
+
+  // Map region names to regions to resolve @ref/@forceRef chains.
+  const regionsByName = new Map<string, Array<models.HttpRegion>>();
+  for (const region of allRegions) {
+    const name = utils.toString(region.metaData?.name);
+    if (!name) {
+      continue;
+    }
+    const list = regionsByName.get(name) || [];
+    list.push(region);
+    regionsByName.set(name, list);
+  }
+
+  // Follow references transitively to account for implicit executions.
+  const queue: Array<models.HttpRegion> = [...executableRegions];
+  while (queue.length > 0) {
+    const region = queue.pop();
+    if (!region) {
+      continue;
+    }
+    for (const refName of getRefNames(region)) {
+      const targets = regionsByName.get(refName);
+      if (!targets) {
+        continue;
+      }
+      for (const target of targets) {
+        if (target.metaData?.disabled === true || target.metaData?.skip || target.isGlobal()) {
+          continue;
+        }
+        if (!executableRegions.has(target)) {
+          executableRegions.add(target);
+          queue.push(target);
+        }
+      }
+    }
+  }
+
+  return executableRegions.size;
 }
 
 function findFirstFailedRegion(processed: Array<models.ProcessedHttpRegion>) {
