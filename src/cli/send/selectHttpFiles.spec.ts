@@ -33,6 +33,10 @@ describe('selectHttpFiles', () => {
         tag: 'bar',
       },
       {
+        name: 'foo_both',
+        tag: 'foo, bar',
+      },
+      {
         name: 'foo5',
         tag: 'fuu',
       },
@@ -78,7 +82,25 @@ describe('selectHttpFiles', () => {
 
     expect(result.length).toBe(1);
     expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
-    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo1', 'foo2', 'foo5']]);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([
+      ['foo1', 'foo2', 'foo_both', 'foo5'],
+    ]);
+  });
+  it('should support comma separated tags', async () => {
+    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo,bar'] });
+
+    expect(result.length).toBe(1);
+    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([
+      ['foo1', 'foo2', 'foo3', 'foo4', 'foo_both'],
+    ]);
+  });
+  it('should support and separated tags', async () => {
+    const result = await selectHttpFiles(defaultHttpFiles, { tag: ['foo+bar'] });
+
+    expect(result.length).toBe(1);
+    expect(result.map(h => h.httpFile.fileName)).toEqual(['test1']);
+    expect(result.map(h => h.httpRegions?.map(hr => hr.metaData.name))).toEqual([['foo_both']]);
   });
   it('should return values by line', async () => {
     const result = await selectHttpFiles(defaultHttpFiles, { line: 1 });
