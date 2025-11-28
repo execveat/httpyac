@@ -9,11 +9,11 @@ import { Logger } from '../../io';
 import * as models from '../../models';
 import { HttpFileStore } from '../../store';
 import * as utils from '../../utils';
-import { toSendJsonOutput } from './jsonOutput';
+import { toSendJsonOutput, toSendOutputRequest } from './jsonOutput';
 import { getLogLevel, OutputType, SendFilterOptions, SendOptions } from './options';
 import { createCliPluginRegister } from './plugin';
 import { transformToJunit } from './junitUtils';
-import { selectHttpFiles } from './selectHttpFiles';
+import { SelectActionResult, selectHttpFiles } from './selectHttpFiles';
 
 export function sendCommand() {
   const program = new Command('send')
@@ -27,6 +27,7 @@ export function sendCommand() {
     .option('--insecure', 'allow insecure server connections when using ssl')
     .option('-i --interactive', 'do not exit the program after request, go back to selection')
     .option('--json', 'use json output')
+    .option('--jsonl', 'stream json lines output')
     .option('--junit', 'use junit xml output')
     .option('-l, --line <line>', 'line of the http requests')
     .option(
@@ -65,7 +66,30 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
       while (options.interactive || isFirstRequest) {
         isFirstRequest = false;
         const selection = await selectHttpFiles(httpFiles, options);
+        const totalRequests = countSelectedRequests(selection);
+        const totalFiles = selection.length;
 
+        let emittedRequests = 0;
+        const emitJsonLine = options.jsonl ? createJsonlEmitter() : undefined;
+
+        if (options.jsonl) {
+          emitJsonLine?.({
+            type: 'start',
+            totalRequests,
+            totalFiles,
+          });
+          context.processedHttpRegionListener = processedHttpRegion => {
+            emittedRequests += 1;
+            emitJsonLine?.({
+              type: 'request',
+              index: emittedRequests,
+              totalRequests,
+              request: toSendOutputRequest(processedHttpRegion, options),
+            });
+          };
+        } else {
+          context.processedHttpRegionListener = undefined;
+        }
         context.processedHttpRegions = [];
 
         const sendFuncs = selection.map(
@@ -79,7 +103,24 @@ async function execute(fileNames: Array<string>, options: SendOptions): Promise<
         );
         await utils.promiseQueue(options.parallel || 1, ...sendFuncs);
 
-        reportOutput(context, options);
+        if (options.jsonl) {
+          emittedRequests = emitRemainingJsonLines(
+            context.processedHttpRegions || [],
+            options,
+            emitJsonLine,
+            emittedRequests,
+            totalRequests
+          );
+          const cliJsonOutput = toSendJsonOutput(context.processedHttpRegions || [], options);
+          emitJsonLine?.({
+            type: 'summary',
+            totalRequests,
+            totalFiles,
+            summary: cliJsonOutput.summary,
+          });
+        } else {
+          reportOutput(context, options);
+        }
       }
     } else {
       console.error(`httpYac cannot find the specified file ${fileNames.join(', ')}.`);
@@ -119,6 +160,44 @@ function reportOutput(context: Omit<models.HttpFileSendContext, 'httpFile'>, opt
   }
 }
 
+function emitRemainingJsonLines(
+  processedHttpRegions: Array<models.ProcessedHttpRegion>,
+  options: SendOptions,
+  emitJsonLine: ((line: unknown) => void) | undefined,
+  emittedRequests: number,
+  totalRequests: number
+) {
+  if (!emitJsonLine) {
+    return emittedRequests;
+  }
+  for (let i = emittedRequests; i < processedHttpRegions.length; i += 1) {
+    emitJsonLine({
+      type: 'request',
+      index: i + 1,
+      totalRequests,
+      request: toSendOutputRequest(processedHttpRegions[i], options),
+    });
+  }
+  return Math.max(emittedRequests, processedHttpRegions.length);
+}
+
+function createJsonlEmitter() {
+  return (line: unknown) => {
+    process.stdout.write(`${utils.stringifySafe(line)}\n`);
+  };
+}
+
+function countSelectedRequests(selection: SelectActionResult) {
+  return selection.reduce((total, { httpFile, httpRegions }) => {
+    const regions = httpRegions ?? httpFile.httpRegions;
+    return (
+      total +
+      regions.filter(region => !region.isGlobal() && region.metaData?.disabled !== true && !region.metaData?.skip)
+        .length
+    );
+  }, 0);
+}
+
 export function convertCliOptionsToContext(cliOptions: SendOptions) {
   const context: Omit<models.HttpFileSendContext, 'httpFile'> = {
     activeEnvironment: cliOptions.env,
@@ -150,6 +229,9 @@ export function convertCliOptionsToContext(cliOptions: SendOptions) {
 }
 
 export function initRequestLogger(cliOptions: SendOptions, context: Omit<models.HttpFileSendContext, 'httpFile'>) {
+  if (cliOptions.jsonl) {
+    return;
+  }
   const scriptConsole = new Logger({
     level: getLogLevel(cliOptions),
     onlyFailedTests: cliOptions.filter === SendFilterOptions.onlyFailed,

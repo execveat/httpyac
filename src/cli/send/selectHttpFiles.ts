@@ -2,7 +2,7 @@ import * as models from '../../models';
 import * as utils from '../../utils';
 import { SendOptions } from './options';
 
-type SelectActionResult = Array<{ httpRegions?: Array<models.HttpRegion>; httpFile: models.HttpFile }>;
+export type SelectActionResult = Array<{ httpRegions?: Array<models.HttpRegion>; httpFile: models.HttpFile }>;
 
 export async function selectHttpFiles(
   httpFiles: Array<models.HttpFile>,
