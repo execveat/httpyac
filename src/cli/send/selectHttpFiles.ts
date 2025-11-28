@@ -46,9 +46,9 @@ function selectHttpFilesWithArgs(httpFiles: Array<models.HttpFile>, cliOptions: 
   return result;
 }
 
-function hasName(httpRegion: models.HttpRegion, name: string | undefined) {
-  if (name) {
-    return httpRegion.metaData?.name === name;
+function hasName(httpRegion: models.HttpRegion, names: Array<string> | undefined) {
+  if (names && names.length > 0) {
+    return names.includes(httpRegion.metaData?.name);
   }
   return false;
 }
